@@ -1,46 +1,44 @@
-# Polymarket: From event **slug** → data (quick guide)
+# From Polymarket event slug → data
 
-This guide shows how to turn a Polymarket **event slug** (e.g., `what-price-will-bitcoin-hit-august-11-17`) into structured data for each binary market: question, token IDs, and prices. It uses `curl` + `jq` against the public Gamma API.
-
-> Requirements: `curl`, `jq` (macOS/Linux; on Windows, use WSL or Git Bash).
+This quick guide shows how to go from a **slug** (e.g., `what-price-will-bitcoin-hit-august-11-17`) to the key **markets**, **token IDs**, and **prices** using `curl` and `jq`.
 
 ---
 
-## 1) Resolve **slug → event id**
+## Step-by-step guide
+
+### 1) Resolve the slug to an event id
 
 ```bash
 SLUG="what-price-will-bitcoin-hit-august-11-17"
-curl -s "https://gamma-api.polymarket.com/events?slug=$SLUG" \
-  | jq '[.[] | {id, ticker, slug, title}]'
-```
-
-To capture just the id:
-
-```bash
 EVENT_ID=$(curl -s "https://gamma-api.polymarket.com/events?slug=$SLUG" | jq -r '.[0].id')
 echo "$EVENT_ID"
 ```
 
-## 2) Get the **event** payload and inspect fields
+This returns the event ID needed to query the event details.
+
+### 2) Get token IDs for the first market (example)
 
 ```bash
-curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" | jq '.' | less
+curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" \
+| jq '.markets[0].clobTokenIds | fromjson'
 ```
 
-Useful fields inside `.markets[]`:
+Example output:
 
-* `outcomes` → expect `["Yes","No"]` for binary markets
-* `prices` → `[yes, no]`
-* `clobTokenIds` → JSON **as a string**; must run `| fromjson`
-* `question` → label for the strike/bracket
+```json
+[
+  "103143573874045117971604635752039925340931165959446595394046689161646463222428",
+  "21156766303400458094022561722221008224798395708803668102392410074584994172215"
+]
+```
 
-## 3) Extract **binary** markets with tokens and prices
+### 3) Extract binary markets with Yes/No, token IDs, and prices
 
 ```bash
 curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" \
 | jq -r '
   [ .markets[]
-    | select(.outcomes == ["Yes","No"])  # keep binary markets
+    | select(.outcomes == ["Yes","No"])
     | {
         question: .question,
         yes_token: (.clobTokenIds | fromjson | .[0]),
@@ -52,32 +50,28 @@ curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" \
 '
 ```
 
----
-
-## One‑liner (copy/paste)
-
-> Replace `SLUG` if needed. Prints an array of objects with `question`, `yes_token`, `no_token`, `yes_price`, `no_price`.
-
-```bash
-SLUG="what-price-will-bitcoin-hit-august-11-17" && EVENT_ID=$(curl -s "https://gamma-api.polymarket.com/events?slug=$SLUG" | jq -r '.[0].id') && curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" | jq -r '[ .markets[] | select(.outcomes == ["Yes","No"]) | {question: .question, yes_token: (.clobTokenIds | fromjson | .[0]), no_token: (.clobTokenIds | fromjson | .[1]), yes_price: (.prices[0]), no_price: (.prices[1])} ]'
-```
-
-### Flat, TSV‑friendly table
-
-```bash
-SLUG="what-price-will-bitcoin-hit-august-11-17" && EVENT_ID=$(curl -s "https://gamma-api.polymarket.com/events?slug=$SLUG" | jq -r '.[0].id') && curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" | jq -r '["question","yes_token","no_token","yes_price","no_price"], ( .markets[] | select(.outcomes == ["Yes","No"]) | [ .question, (.clobTokenIds | fromjson | .[0]), (.clobTokenIds | fromjson | .[1]), (.prices[0]), (.prices[1]) ] ) | @tsv'
-```
-
-Pipe through `column` for prettier CLI output:
-
-```bash
-... | column -t
-```
+This produces a clean JSON array of relevant markets.
 
 ---
 
 ## Notes
 
-* Always run `| fromjson` on `clobTokenIds` before indexing it.
-* Prices are in dollars for Yes/No shares; treat them as rough implied probabilities (subject to fees/liquidity).
-* If a slug returns multiple events, filter by `.title`, `.startDate`, or other metadata before selecting `[0]`.
+* `clobTokenIds` is returned as a **stringified JSON array**; always run through `fromjson` before indexing.
+* Prices are dollar-based and often used as implied probabilities.
+* Use `jq` filters to sort or further transform the data.
+
+---
+
+**Example market output:**
+
+```json
+[
+  {
+    "question": "Will Bitcoin reach $127k August 11–17?",
+    "yes_token": "103143573874045117971604635752039925340931165959446595394046689161646463222428",
+    "no_token": "21156766303400458094022561722221008224798395708803668102392410074584994172215",
+    "yes_price": 0.075,
+    "no_price": 0.925
+  }
+]
+```
