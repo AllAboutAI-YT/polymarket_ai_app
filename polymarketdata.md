@@ -1,4 +1,4 @@
-# Polymarket: slug → TSV of brackets, token IDs, and prices
+# Polymarket: slug → JSON/TSV of brackets, token IDs, and prices
 
 Use these **two commands** exactly. They print a tab‑separated table with a header and one line per bracket.
 
@@ -14,12 +14,12 @@ echo "$EVENT_ID"
 
 Expected: prints something like `37057`.
 
-## 2) Fetch event and emit TSV (sorted by parsed bracket)
+## 2) Fetch event and emit **pretty JSON** (sorted by parsed bracket)
 
 ```bash
 EVENT=$EVENT_ID
 curl -s "https://gamma-api.polymarket.com/events/$EVENT" \
-| jq -r '
+| jq '
   def prices: (.outcomePrices | fromjson | map(tonumber));
   def tokens: (.clobTokenIds   | fromjson);
   def outs:   (.outcomes       | fromjson);
@@ -42,13 +42,9 @@ curl -s "https://gamma-api.polymarket.com/events/$EVENT" \
   ]
   | sort_by(.key.kind, .key.lo, .key.hi)
   | map(del(.key))
-  | ( ["bracket","yes_token","no_token","yes_price","no_price"] | @tsv ),
-    ( .[] | [ .bracket, .yes_token, .no_token, (.yes_price|tostring), (.no_price|tostring) ] | @tsv )
+  | .[]
 '
 ```
 
-### Notes
+This prints a **series of pretty JSON objects**, one after another—just like in your screenshot.
 
-* This version uses `.outcomePrices` (stringified) → `fromjson` → numeric, and matches only `Yes/No` markets.
-* Output is **TSV**: first line is a header, following lines are data.
-* If your event uses different outcome labels or structures, we can make the selector more permissive (e.g., drop the `outs == ["Yes","No"]` check).
