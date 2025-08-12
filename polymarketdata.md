@@ -1,12 +1,10 @@
-# From Polymarket event slug → data
+# Polymarket: slug → TSV of brackets, token IDs, and prices
 
-This quick guide shows how to go from a **slug** (e.g., `what-price-will-bitcoin-hit-august-11-17`) to the key **markets**, **token IDs**, and **prices** using `curl` and `jq`.
+Use these **two commands** exactly. They print a tab‑separated table with a header and one line per bracket.
 
 ---
 
-## Step-by-step guide
-
-### 1) Resolve the slug to an event id
+## 1) Resolve slug → event id
 
 ```bash
 SLUG="what-price-will-bitcoin-hit-august-11-17"
@@ -14,66 +12,43 @@ EVENT_ID=$(curl -s "https://gamma-api.polymarket.com/events?slug=$SLUG" | jq -r 
 echo "$EVENT_ID"
 ```
 
-This returns the event ID needed to query the event details.
+Expected: prints something like `37057`.
 
-### 2) Get the event payload
-
-```bash
-curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" | jq '.' | less
-```
-
-Inspect the `.markets[]` array to see all markets, outcomes, token IDs, and prices.
-
-### 3) Extract brackets, token IDs, and prices (sorted & NDJSON)
-
-This version matches what you showed: it parses the strike from the question text, sorts the brackets, and prints **one JSON object per line** (NDJSON).
+## 2) Fetch event and emit TSV (sorted by parsed bracket)
 
 ```bash
-curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" \
+EVENT=$EVENT_ID
+curl -s "https://gamma-api.polymarket.com/events/$EVENT" \
 | jq -r '
+  def prices: (.outcomePrices | fromjson | map(tonumber));
+  def tokens: (.clobTokenIds   | fromjson);
+  def outs:   (.outcomes       | fromjson);
   def skey(s):
-    if (s|test("(?i)\$?([0-9]+)k\s*[–-]\s*\$?([0-9]+)k")) then
-      (s|capture("(?i)\$?(?<a>[0-9]+)k\s*[–-]\s*\$?(?<b>[0-9]+)k")|{kind:1, lo:(.a|tonumber), hi:(.b|tonumber)})
-    elif (s|test("(?i)>\$?([0-9]+)k")) then
-      (s|capture("(?i)>\$?(?<n>[0-9]+)k")|{kind:2, lo:(.n|tonumber), hi:0})
-    elif (s|test("(?i)(greater|over|above)\s+\$?([0-9]+)k")) then
-      (s|capture("(?i)(?:greater|over|above)\s+\$?(?<n>[0-9]+)k")|{kind:2, lo:(.n|tonumber), hi:0})
-    elif (s|test("(?i)\$([0-9]{2,6})")) then
-      (s|capture("(?i)\$(?<n>[0-9]{2,6})")|{kind:0, lo:(.n|tonumber), hi:(.n|tonumber)})
+    if   (s|test("(?i)<\\$?([0-9]+)k"))                                      then (s|capture("(?i)<\\$?(?<n>[0-9]+)k")                              | {kind:0, lo:(.n|tonumber), hi:0})
+    elif (s|test("(?i)(less|under|below)\\s+\\$?([0-9]+)k"))                 then (s|capture("(?i)(?:less|under|below)\\s+\\$?(?<n>[0-9]+)k")     | {kind:0, lo:(.n|tonumber), hi:0})
+    elif (s|test("(?i)between\\s+\\$?([0-9]+)k\\s+and\\s+\\$?([0-9]+)k")) then (s|capture("(?i)between\\s+\\$?(?<a>[0-9]+)k\\s+and\\s+\\$?(?<b>[0-9]+)k") | {kind:1, lo:(.a|tonumber), hi:(.b|tonumber)})
+    elif (s|test("(?i)\\$?([0-9]+)k\\s*[–-]\\s*\\$?([0-9]+)k"))            then (s|capture("(?i)\\$?(?<a>[0-9]+)k\\s*[–-]\\s*\\$?(?<b>[0-9]+)k") | {kind:1, lo:(.a|tonumber), hi:(.b|tonumber)})
+    elif (s|test("(?i)>\\$?([0-9]+)k"))                                       then (s|capture("(?i)>\\$?(?<n>[0-9]+)k")                             | {kind:2, lo:(.n|tonumber), hi:0})
+    elif (s|test("(?i)(greater|over|above)\\s+\\$?([0-9]+)k"))               then (s|capture("(?i)(?:greater|over|above)\\s+\\$?(?<n>[0-9]+)k")   | {kind:2, lo:(.n|tonumber), hi:0})
     else {kind:9, lo:0, hi:0} end;
 
   [ .markets[]
-    | {bracket: .question,
-       p: .prices,
-       t: (.clobTokenIds | fromjson),
-       outs: .outcomes}
-    | select((.outs|length)==2 and (.p|length)==2 and (.t|length)==2)
+    | select(outs == ["Yes","No"])                # only binary Yes/No
+    | {bracket: .question, p: prices, t: tokens}
+    | select((.p|length)==2 and (.t|length)==2)      # ensure 2 prices & 2 tokens
     | . + {key: skey(.bracket)}
     | . + {yes_token: .t[0], no_token: .t[1], yes_price: .p[0], no_price: .p[1]}
-    | del(.p,.t,.outs)
+    | del(.p,.t)
   ]
   | sort_by(.key.kind, .key.lo, .key.hi)
   | map(del(.key))
-  | .[]
+  | ( ["bracket","yes_token","no_token","yes_price","no_price"] | @tsv ),
+    ( .[] | [ .bracket, .yes_token, .no_token, (.yes_price|tostring), (.no_price|tostring) ] | @tsv )
 '
 ```
 
-**Example output:**
+### Notes
 
-```json
-{
-  "bracket": "Will Bitcoin reach $127k August 11–17?",
-  "yes_token": "103143573874045117971604635752039925340931165959446595394046689161646463222428",
-  "no_token": "21156766303400458094022561722221008224798395708803668102392410074584994172215",
-  "yes_price": 0.075,
-  "no_price": 0.925
-}
-```
-
----
-
-## Notes
-
-* This method works even if `.outcomes` is not exactly `["Yes","No"]`.
-* `clobTokenIds` is returned as a **stringified JSON array**; always run through `fromjson` before indexing.
-* The sort key logic can be adjusted to match different strike formats.
+* This version uses `.outcomePrices` (stringified) → `fromjson` → numeric, and matches only `Yes/No` markets.
+* Output is **TSV**: first line is a header, following lines are data.
+* If your event uses different outcome labels or structures, we can make the selector more permissive (e.g., drop the `outs == ["Yes","No"]` check).
