@@ -32,13 +32,15 @@ Example output:
 ]
 ```
 
-### 3) Extract binary markets with Yes/No, token IDs, and prices
+### 3) Extract binary markets with token IDs and prices (robust)
+
+If your previous filter returned an empty array, it’s likely because `.outcomes` didn’t exactly equal `["Yes","No"]` for this event. Use this more robust selector that keys off the presence of **two token IDs** and **two prices** instead:
 
 ```bash
 curl -s "https://gamma-api.polymarket.com/events/$EVENT_ID" \
 | jq -r '
   [ .markets[]
-    | select(.outcomes == ["Yes","No"])
+    | select((.clobTokenIds | fromjson | length) == 2 and (.prices | length) == 2)
     | {
         question: .question,
         yes_token: (.clobTokenIds | fromjson | .[0]),
@@ -56,22 +58,7 @@ This produces a clean JSON array of relevant markets.
 
 ## Notes
 
+* If step 3 returned `[]`, the `.outcomes` array may not be exactly `["Yes","No"]`. The robust filter above avoids relying on outcome labels.
 * `clobTokenIds` is returned as a **stringified JSON array**; always run through `fromjson` before indexing.
 * Prices are dollar-based and often used as implied probabilities.
-* Use `jq` filters to sort or further transform the data.
-
----
-
-**Example market output:**
-
-```json
-[
-  {
-    "question": "Will Bitcoin reach $127k August 11–17?",
-    "yes_token": "103143573874045117971604635752039925340931165959446595394046689161646463222428",
-    "no_token": "21156766303400458094022561722221008224798395708803668102392410074584994172215",
-    "yes_price": 0.075,
-    "no_price": 0.925
-  }
-]
-```
+* You can further filter/sort by parsing numbers from `.question` (e.g., strikes) or by checking fields like `.active`, `.closed`, or dates.
